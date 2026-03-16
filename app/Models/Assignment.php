@@ -12,6 +12,7 @@ class Assignment extends Model
         'schedule_id',
         'total_units',
         'rationale',
+        'match_score',
         'is_overloaded',
         'assigned_by',
     ];

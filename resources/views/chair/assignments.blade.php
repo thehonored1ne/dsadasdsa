@@ -104,6 +104,7 @@
                             <th class="px-4 py-3">Schedule</th>
                             <th class="px-4 py-3">Units</th>
                             <th class="px-4 py-3">Rationale</th>
+                            <th class="px-4 py-3">Match Score</th>
                             <th class="px-4 py-3">Status</th>
                             <th class="px-4 py-3">Override</th>
                         </tr>
@@ -121,6 +122,19 @@
                             </td>
                             <td class="px-4 py-3">{{ $assignment->total_units }}</td>
                             <td class="px-4 py-3 capitalize">{{ str_replace('_', ' ', $assignment->rationale) }}</td>
+                            <td class="px-4 py-3">
+                                @if(!is_null($assignment->match_score))
+                                    @php $percent = $assignment->match_score * 100; @endphp
+                                    <div class="flex items-center gap-2">
+                                        <div class="w-16 bg-gray-200 rounded h-2">
+                                            <div class="bg-blue-600 h-2 rounded" style="width: {{ $percent }}%"></div>
+                                        </div>
+                                        <span class="text-xs font-semibold">{{ $percent }}%</span>
+                                    </div>
+                                @else
+                                    <span class="text-xs text-gray-400">N/A</span>
+                                @endif
+                            </td>
                             <td class="px-4 py-3">
                                 @if($assignment->is_overloaded)
                                     <span class="px-2 py-1 bg-red-100 text-red-600 rounded text-xs font-medium">Overloaded</span>

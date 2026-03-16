@@ -7,6 +7,7 @@ use App\Models\Schedule;
 use App\Models\Subject;
 use App\Models\TeacherProfile;
 use App\Services\NotificationService;
+use App\Services\TFIDFService;
 
 class AssignmentService
 {
@@ -28,63 +29,86 @@ class AssignmentService
 
         $teacherScheduleMap = [];
 
+        // Instantiate TFIDFService
+        $tfidfService = new TFIDFService;
+
         foreach ($subjects as $subject) {
-            if (!empty($subject->prerequisites)) {
+            // Check prerequisites
+            if (! empty($subject->prerequisites)) {
                 $prereqs = array_map('trim', explode(',', $subject->prerequisites));
                 foreach ($prereqs as $prereq) {
-                    if (!in_array($prereq, $assignedSubjectCodes)) {
+                    if (! empty($prereq) && ! in_array($prereq, $assignedSubjectCodes)) {
                         continue 2;
                     }
                 }
             }
 
+            // Pick a schedule slot
             $schedule = $schedules->get($scheduleIndex);
-            if (!$schedule) break;
+            if (! $schedule) {
+                break;
+            }
             $scheduleIndex++;
 
-            $expertiseMatches = $teachers->filter(function ($teacher) use ($subject) {
-                $expertiseList = array_map('trim', explode('|', strtolower($teacher->expertise_areas)));
-                $subjectName = strtolower($subject->name);
-                $subjectCode = strtolower($subject->code);
-
-                foreach ($expertiseList as $expertise) {
-                    if (str_contains($subjectName, $expertise) || str_contains($subjectCode, $expertise)) {
-                        return true;
-                    }
+            // Step 1: Score teachers with TF-IDF and filter matches > 0.3
+            $scoredTeachers = [];
+            foreach ($teachers as $teacher) {
+                $score = $tfidfService->calculateMatchScore($teacher->expertise_areas ?? '', $subject->name);
+                if ($score >= 0.3) {
+                    $scoredTeachers[] = [
+                        'teacher' => $teacher,
+                        'score' => $score,
+                    ];
                 }
-                return false;
+            }
+
+            // Sort by highest score first
+            usort($scoredTeachers, function ($a, $b) {
+                return $b['score'] <=> $a['score'];
             });
 
-            $availableExpertise = $expertiseMatches->filter(function ($teacher) use ($schedule, $teacherScheduleMap) {
-                return $this->isAvailable($teacher, $schedule) &&
-                    $this->hasNoConflict($teacher->id, $schedule->id, $teacherScheduleMap);
+            // Step 2: Among expertise matches find available teachers (overlap check)
+            $availableExpertise = collect($scoredTeachers)->filter(function ($item) use ($schedule, $teacherScheduleMap) {
+                return $this->isAvailable($item['teacher'], $schedule) &&
+                    $this->hasNoConflict($item['teacher']->id, $schedule->id, $teacherScheduleMap);
             });
 
+            // Step 3: Fallback to availability only (overlap check)
             $availableOnly = $teachers->filter(function ($teacher) use ($schedule, $teacherScheduleMap) {
                 return $this->isAvailable($teacher, $schedule) &&
                     $this->hasNoConflict($teacher->id, $schedule->id, $teacherScheduleMap);
             });
 
+            // Step 4: Pick best teacher
             $rationale = 'expertise_match';
-            $selectedTeacher = $availableExpertise->first();
+            $matchScore = null;
 
-            if (!$selectedTeacher) {
+            $bestMatch = $availableExpertise->first();
+            if ($bestMatch) {
+                $selectedTeacher = $bestMatch['teacher'];
+                $matchScore = $bestMatch['score'];
+            } else {
                 $selectedTeacher = $availableOnly->first();
                 $rationale = 'availability';
             }
 
-            if (!$selectedTeacher) continue;
+            if (! $selectedTeacher) {
+                continue;
+            }
 
+            // Step 5: Calculate total units
             $currentUnits = $selectedTeacher->assignments()->sum('total_units');
             $newTotal = $currentUnits + $subject->units;
             $isOverloaded = $newTotal > $selectedTeacher->max_units;
 
+            // Step 6: Create assignment
             $assignment = Assignment::create([
                 'teacher_profile_id' => $selectedTeacher->id,
                 'subject_id' => $subject->id,
                 'schedule_id' => $schedule->id,
                 'total_units' => $subject->units,
                 'rationale' => $rationale,
+                'match_score' => $matchScore,
                 'is_overloaded' => $isOverloaded,
                 'assigned_by' => $assignedBy,
             ]);
@@ -105,8 +129,12 @@ class AssignmentService
                 );
             }
 
+            // Track conflict map
             $teacherScheduleMap[$selectedTeacher->id][] = $schedule->id;
+
+            // Track assigned subject codes for prerequisites
             $assignedSubjectCodes[] = $subject->code;
+
             $results[] = $assignment;
         }
 
@@ -116,17 +144,19 @@ class AssignmentService
     private function isAvailable(TeacherProfile $teacher, Schedule $schedule): bool
     {
         return $teacher->availabilities->contains(function ($availability) use ($schedule) {
+            // Overlap check: teacher availability overlaps with schedule slot
             return $availability->day === $schedule->day &&
-                $availability->time_start <= $schedule->time_start &&
-                $availability->time_end >= $schedule->time_end;
+                $availability->time_start < $schedule->time_end &&
+                $availability->time_end > $schedule->time_start;
         });
     }
 
     private function hasNoConflict(int $teacherId, int $scheduleId, array $teacherScheduleMap): bool
     {
-        if (!isset($teacherScheduleMap[$teacherId])) {
+        if (! isset($teacherScheduleMap[$teacherId])) {
             return true;
         }
-        return !in_array($scheduleId, $teacherScheduleMap[$teacherId]);
+
+        return ! in_array($scheduleId, $teacherScheduleMap[$teacherId]);
     }
 }

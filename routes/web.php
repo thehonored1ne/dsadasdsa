@@ -34,6 +34,7 @@ Route::middleware(['auth', 'role:program_chair'])->group(function () {
     Route::get('/chair/report/export-csv', [ChairController::class, 'exportCsv'])->name('chair.report.csv');
     Route::get('/chair/report/export-pdf', [ChairController::class, 'exportPdf'])->name('chair.report.pdf');
     Route::get('/chair/audit-log', [ChairController::class, 'auditLog'])->name('chair.audit.log');
+    Route::get('/chair/templates/{type}/{format}', [ChairController::class, 'downloadTemplate'])->name('chair.templates.download');
 });
 
 Route::middleware(['auth', 'role:teacher'])->group(function () {
