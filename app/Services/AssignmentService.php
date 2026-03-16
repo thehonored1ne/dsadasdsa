@@ -41,6 +41,7 @@ class AssignmentService
             if (!$schedule) break;
             $scheduleIndex++;
 
+            // Score teachers using TF-IDF
             $scoredTeachers = [];
             foreach ($teachers as $teacher) {
                 $score = $tfidfService->calculateMatchScore($teacher->expertise_areas ?? '', $subject->name);
@@ -54,32 +55,23 @@ class AssignmentService
 
             usort($scoredTeachers, fn($a, $b) => $b['score'] <=> $a['score']);
 
+            // Filter by availability and conflict — expertise only, no fallback
             $availableExpertise = collect($scoredTeachers)->filter(function ($item) use ($schedule, $teacherScheduleMap) {
                 return $this->isAvailable($item['teacher'], $schedule) &&
                     $this->hasNoConflict($item['teacher']->id, $schedule->id, $teacherScheduleMap);
             });
 
-            $availableOnly = $teachers->filter(function ($teacher) use ($schedule, $teacherScheduleMap) {
-                return $this->isAvailable($teacher, $schedule) &&
-                    $this->hasNoConflict($teacher->id, $schedule->id, $teacherScheduleMap);
-            });
-
-            $rationale = 'expertise_match';
-            $matchScore = null;
-
             $bestMatch = $availableExpertise->first();
-            if ($bestMatch) {
-                $selectedTeacher = $bestMatch['teacher'];
-                $matchScore = $bestMatch['score'];
-            } else {
-                $selectedTeacher = $availableOnly->first();
-                $rationale = 'availability';
-            }
 
-            if (!$selectedTeacher) {
-                $skipped[] = $subject->name . ' (no available teacher)';
+            if (!$bestMatch) {
+                // No expert available — skip, leave unassigned
+                $skipped[] = $subject->name . ' (no available expert)';
                 continue;
             }
+
+            $selectedTeacher = $bestMatch['teacher'];
+            $matchScore = $bestMatch['score'];
+            $rationale = 'expertise_match';
 
             $currentUnits = $selectedTeacher->assignments()->sum('total_units');
             $newTotal = $currentUnits + $subject->units;
@@ -118,14 +110,13 @@ class AssignmentService
         return [
             'assignments' => $results,
             'skipped' => $skipped,
-            'conflicts' => 0, // conflicts prevented by engine
+            'conflicts' => 0,
         ];
     }
 
     private function isAvailable(TeacherProfile $teacher, Schedule $schedule): bool
     {
         return $teacher->availabilities->contains(function ($availability) use ($schedule) {
-            // Overlap check: teacher availability overlaps with schedule slot
             return $availability->day === $schedule->day &&
                 $availability->time_start < $schedule->time_end &&
                 $availability->time_end > $schedule->time_start;
@@ -134,10 +125,10 @@ class AssignmentService
 
     private function hasNoConflict(int $teacherId, int $scheduleId, array $teacherScheduleMap): bool
     {
-        if (! isset($teacherScheduleMap[$teacherId])) {
+        if (!isset($teacherScheduleMap[$teacherId])) {
             return true;
         }
 
-        return ! in_array($scheduleId, $teacherScheduleMap[$teacherId]);
+        return !in_array($scheduleId, $teacherScheduleMap[$teacherId]);
     }
 }

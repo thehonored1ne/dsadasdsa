@@ -72,49 +72,49 @@ class ChairController extends Controller
         return view('chair.upload');
     }
 
-    public function assignments(Request $request)
-    {
-        $query = Assignment::with([
-            'teacherProfile.user',
-            'subject',
-            'schedule',
-        ]);
+public function assignments(Request $request)
+{
+    $query = Assignment::with([
+        'teacherProfile.user',
+        'subject',
+        'schedule',
+    ]);
 
-        // Search by teacher name or subject
-        if ($request->filled('search')) {
-            $search = $request->search;
-            $query->where(function ($q) use ($search) {
-                $q->whereHas('teacherProfile.user', function ($q2) use ($search) {
-                    $q2->where('name', 'like', "%$search%");
-                })->orWhereHas('subject', function ($q2) use ($search) {
-                    $q2->where('name', 'like', "%$search%")
-                        ->orWhere('code', 'like', "%$search%");
-                });
+    if ($request->filled('search')) {
+        $search = $request->search;
+        $query->where(function ($q) use ($search) {
+            $q->whereHas('teacherProfile.user', function ($q2) use ($search) {
+                $q2->where('name', 'like', "%$search%");
+            })->orWhereHas('subject', function ($q2) use ($search) {
+                $q2->where('name', 'like', "%$search%")
+                    ->orWhere('code', 'like', "%$search%");
             });
-        }
-
-        // Filter by rationale
-        if ($request->filled('rationale')) {
-            $query->where('rationale', $request->rationale);
-        }
-
-        // Filter by status
-        if ($request->filled('status')) {
-            $query->where('is_overloaded', $request->status === 'overloaded');
-        }
-
-        // Filter by day
-        if ($request->filled('day')) {
-            $query->whereHas('schedule', function ($q) use ($request) {
-                $q->where('day', $request->day);
-            });
-        }
-
-        $assignments = $query->get();
-        $teachers = TeacherProfile::with('user')->get();
-
-        return view('chair.assignments', compact('assignments', 'teachers'));
+        });
     }
+
+    if ($request->filled('rationale')) {
+        $query->where('rationale', $request->rationale);
+    }
+
+    if ($request->filled('status')) {
+        $query->where('is_overloaded', $request->status === 'overloaded');
+    }
+
+    if ($request->filled('day')) {
+        $query->whereHas('schedule', function ($q) use ($request) {
+            $q->where('day', $request->day);
+        });
+    }
+
+    $assignments = $query->get();
+    $teachers = TeacherProfile::with('user')->get();
+
+    // Get unassigned subjects
+    $assignedSubjectIds = Assignment::pluck('subject_id')->toArray();
+    $unassignedSubjects = \App\Models\Subject::whereNotIn('id', $assignedSubjectIds)->get();
+
+    return view('chair.assignments', compact('assignments', 'teachers', 'unassignedSubjects'));
+}
 
     public function report()
     {
