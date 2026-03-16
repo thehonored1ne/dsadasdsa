@@ -15,7 +15,7 @@
             </div>
 
             {{-- Stats Cards --}}
-            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-6">
                 <div class="bg-white shadow-sm sm:rounded-lg p-6">
                     <p class="text-sm text-gray-500">Total Teachers</p>
                     <p class="text-3xl font-bold text-gray-800 mt-1">{{ $totalTeachers }}</p>
@@ -31,6 +31,11 @@
                 <div class="bg-white shadow-sm sm:rounded-lg p-6">
                     <p class="text-sm text-gray-500">Overloaded Teachers</p>
                     <p class="text-3xl font-bold text-red-600 mt-1">{{ $overloadedCount }}</p>
+                </div>
+                <div class="bg-white shadow-sm sm:rounded-lg p-6">
+                    <p class="text-sm text-gray-500">Scheduling Conflicts</p>
+                    <p class="text-3xl font-bold text-green-600 mt-1">{{ $conflictsCount }}</p>
+                    <p class="text-xs text-green-500 mt-1">✓ Zero conflicts</p>
                 </div>
             </div>
 

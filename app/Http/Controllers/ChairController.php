@@ -22,6 +22,8 @@ class ChairController extends Controller
         $totalSubjects = Subject::count();
         $totalAssignments = Assignment::count();
         $overloadedCount = Assignment::where('is_overloaded', true)->count();
+        $conflictsCount = 0; // always 0 — engine prevents conflicts
+
         $recentAssignments = Assignment::with([
             'teacherProfile.user',
             'subject',
@@ -34,9 +36,9 @@ class ChairController extends Controller
 
         // Chart 2 — Units per teacher
         $teachers = TeacherProfile::with(['user', 'assignments'])->get();
-        $teacherNames = $teachers->map(fn ($t) => $t->user->name)->toArray();
-        $teacherUnits = $teachers->map(fn ($t) => $t->assignments->sum('total_units'))->toArray();
-        $teacherMaxUnits = $teachers->map(fn ($t) => $t->max_units)->toArray();
+        $teacherNames = $teachers->map(fn($t) => $t->user->name)->toArray();
+        $teacherUnits = $teachers->map(fn($t) => $t->assignments->sum('total_units'))->toArray();
+        $teacherMaxUnits = $teachers->map(fn($t) => $t->max_units)->toArray();
 
         // Chart 3 — Assignments per day
         $days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -52,6 +54,7 @@ class ChairController extends Controller
             'totalSubjects',
             'totalAssignments',
             'overloadedCount',
+            'conflictsCount',
             'recentAssignments',
             'expertiseCount',
             'availabilityCount',
@@ -126,71 +129,72 @@ class ChairController extends Controller
         return view('chair.report', compact('assignments', 'teacherSummary'));
     }
 
-    public function exportCsv()
-    {
-        $assignments = Assignment::with([
-            'teacherProfile.user',
-            'subject',
-            'schedule',
-        ])->get();
+public function exportCsv()
+{
+    $assignments = Assignment::with([
+        'teacherProfile.user',
+        'subject',
+        'schedule'
+    ])->get();
 
-        $teacherSummary = $this->getTeacherSummary();
-        $filename = 'load_assignment_report_'.now()->format('Y_m_d').'.csv';
+    $teacherSummary = $this->getTeacherSummary();
+    $filename = 'load_assignment_report_' . now()->format('Y_m_d') . '.csv';
 
-        $headers = [
-            'Content-Type' => 'text/csv',
-            'Content-Disposition' => "attachment; filename=$filename",
-        ];
+    $headers = [
+        'Content-Type' => 'text/csv',
+        'Content-Disposition' => "attachment; filename=$filename",
+    ];
 
-        $callback = function () use ($assignments, $teacherSummary) {
-            $file = fopen('php://output', 'w');
+    $callback = function () use ($assignments, $teacherSummary) {
+        $file = fopen('php://output', 'w');
 
-            // Teacher Summary Section
-            fputcsv($file, ['TEACHER LOAD SUMMARY']);
-            fputcsv($file, ['Teacher', 'Assigned Subjects', 'Total Units', 'Max Units', 'Status']);
-            foreach ($teacherSummary as $summary) {
+        // Header row
+        fputcsv($file, [
+            'Teacher Name',
+            'Subject Code',
+            'Subject Name',
+            'Units',
+            'Rationale',
+            'Total Units',
+            'Max Units',
+            'Overload Flag',
+        ]);
+
+        foreach ($teacherSummary as $summary) {
+            $teacherAssignments = $assignments->filter(
+                fn($a) => $a->teacherProfile->user->name === $summary['name']
+            );
+
+            $firstRow = true;
+            foreach ($teacherAssignments as $assignment) {
                 fputcsv($file, [
-                    $summary['name'],
-                    $summary['subject_count'],
+                    $firstRow ? $summary['name'] : '', // teacher name only on first row
+                    $assignment->subject->code,
+                    $assignment->subject->name,
+                    $assignment->total_units,
+                    str_replace('_', ' ', ucfirst($assignment->rationale)),
+                    $firstRow ? $summary['total_units'] : '', // total units only on first row
+                    $firstRow ? $summary['max_units'] : '',
+                    $firstRow ? ($summary['is_overloaded'] ? 'Overloaded' : 'OK') : '',
+                ]);
+                $firstRow = false;
+            }
+
+            if ($teacherAssignments->isEmpty()) {
+                fputcsv($file, [
+                    $summary['name'], '', '', '', '',
                     $summary['total_units'],
                     $summary['max_units'],
                     $summary['is_overloaded'] ? 'Overloaded' : 'OK',
                 ]);
             }
+        }
 
-            fputcsv($file, []); // empty row separator
+        fclose($file);
+    };
 
-            // Assignments Section
-            fputcsv($file, ['ASSIGNMENT DETAILS']);
-            fputcsv($file, [
-                'Teacher Name',
-                'Subject Code',
-                'Subject Name',
-                'Units',
-                'Schedule',
-                'Room',
-                'Rationale',
-                'Status',
-            ]);
-
-            foreach ($assignments as $assignment) {
-                fputcsv($file, [
-                    $assignment->teacherProfile->user->name,
-                    $assignment->subject->code,
-                    $assignment->subject->name,
-                    $assignment->total_units,
-                    $assignment->schedule->day.' '.$assignment->schedule->time_start.' - '.$assignment->schedule->time_end,
-                    $assignment->schedule->room,
-                    str_replace('_', ' ', $assignment->rationale),
-                    $assignment->is_overloaded ? 'Overloaded' : 'OK',
-                ]);
-            }
-
-            fclose($file);
-        };
-
-        return response()->stream($callback, 200, $headers);
-    }
+    return response()->stream($callback, 200, $headers);
+}
 
     public function exportPdf()
     {

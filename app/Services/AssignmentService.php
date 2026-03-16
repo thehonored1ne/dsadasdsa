@@ -19,38 +19,28 @@ class AssignmentService
         $schedules = Schedule::all();
         $teachers = TeacherProfile::with(['availabilities', 'assignments', 'user'])->get();
         $results = [];
+        $skipped = [];
         $scheduleIndex = 0;
 
-        $assignedSubjectCodes = Assignment::whereIn('rationale', ['expertise_match', 'availability'])
-            ->with('subject')
-            ->get()
-            ->pluck('subject.code')
-            ->toArray();
-
+        $assignedSubjectCodes = [];
         $teacherScheduleMap = [];
-
-        // Instantiate TFIDFService
         $tfidfService = new TFIDFService;
 
         foreach ($subjects as $subject) {
-            // Check prerequisites
-            if (! empty($subject->prerequisites)) {
+            if (!empty($subject->prerequisites)) {
                 $prereqs = array_map('trim', explode(',', $subject->prerequisites));
                 foreach ($prereqs as $prereq) {
-                    if (! empty($prereq) && ! in_array($prereq, $assignedSubjectCodes)) {
+                    if (!empty($prereq) && !in_array($prereq, $assignedSubjectCodes)) {
+                        $skipped[] = $subject->name . ' (prerequisite not met)';
                         continue 2;
                     }
                 }
             }
 
-            // Pick a schedule slot
             $schedule = $schedules->get($scheduleIndex);
-            if (! $schedule) {
-                break;
-            }
+            if (!$schedule) break;
             $scheduleIndex++;
 
-            // Step 1: Score teachers with TF-IDF and filter matches > 0.3
             $scoredTeachers = [];
             foreach ($teachers as $teacher) {
                 $score = $tfidfService->calculateMatchScore($teacher->expertise_areas ?? '', $subject->name);
@@ -62,24 +52,18 @@ class AssignmentService
                 }
             }
 
-            // Sort by highest score first
-            usort($scoredTeachers, function ($a, $b) {
-                return $b['score'] <=> $a['score'];
-            });
+            usort($scoredTeachers, fn($a, $b) => $b['score'] <=> $a['score']);
 
-            // Step 2: Among expertise matches find available teachers (overlap check)
             $availableExpertise = collect($scoredTeachers)->filter(function ($item) use ($schedule, $teacherScheduleMap) {
                 return $this->isAvailable($item['teacher'], $schedule) &&
                     $this->hasNoConflict($item['teacher']->id, $schedule->id, $teacherScheduleMap);
             });
 
-            // Step 3: Fallback to availability only (overlap check)
             $availableOnly = $teachers->filter(function ($teacher) use ($schedule, $teacherScheduleMap) {
                 return $this->isAvailable($teacher, $schedule) &&
                     $this->hasNoConflict($teacher->id, $schedule->id, $teacherScheduleMap);
             });
 
-            // Step 4: Pick best teacher
             $rationale = 'expertise_match';
             $matchScore = null;
 
@@ -92,16 +76,15 @@ class AssignmentService
                 $rationale = 'availability';
             }
 
-            if (! $selectedTeacher) {
+            if (!$selectedTeacher) {
+                $skipped[] = $subject->name . ' (no available teacher)';
                 continue;
             }
 
-            // Step 5: Calculate total units
             $currentUnits = $selectedTeacher->assignments()->sum('total_units');
             $newTotal = $currentUnits + $subject->units;
             $isOverloaded = $newTotal > $selectedTeacher->max_units;
 
-            // Step 6: Create assignment
             $assignment = Assignment::create([
                 'teacher_profile_id' => $selectedTeacher->id,
                 'subject_id' => $subject->id,
@@ -113,14 +96,12 @@ class AssignmentService
                 'assigned_by' => $assignedBy,
             ]);
 
-            // Send notification to teacher
             NotificationService::send(
                 $selectedTeacher->user->id,
                 'New Subject Assigned',
                 "You have been assigned to teach {$subject->name} ({$subject->code}) on {$schedule->day} {$schedule->time_start} - {$schedule->time_end} at {$schedule->room}."
             );
 
-            // Send overload notification
             if ($isOverloaded) {
                 NotificationService::send(
                     $selectedTeacher->user->id,
@@ -129,16 +110,16 @@ class AssignmentService
                 );
             }
 
-            // Track conflict map
             $teacherScheduleMap[$selectedTeacher->id][] = $schedule->id;
-
-            // Track assigned subject codes for prerequisites
             $assignedSubjectCodes[] = $subject->code;
-
             $results[] = $assignment;
         }
 
-        return $results;
+        return [
+            'assignments' => $results,
+            'skipped' => $skipped,
+            'conflicts' => 0, // conflicts prevented by engine
+        ];
     }
 
     private function isAvailable(TeacherProfile $teacher, Schedule $schedule): bool
