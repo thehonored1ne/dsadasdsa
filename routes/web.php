@@ -8,7 +8,7 @@ use App\Http\Controllers\TeacherController;
 use App\Http\Controllers\AssignmentController;
 
 Route::get('/', function () {
-    return view('welcome');
+    return redirect()->route('login');
 });
 
 Route::middleware('auth')->group(function () {
